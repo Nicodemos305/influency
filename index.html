@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agenda da Influencer</title>
+    <!-- Carregamento do Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'influencer-pink': '#FF69B4', // Rosa Choque / Hot Pink
+                        'influencer-light': '#FFE0F0',
+                        'influencer-dark': '#C71585', // Deep Pink
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Estilo customizado para scrollbar e foco em mobile */
+        body {
+            background-color: #f7f7f7;
+            font-family: 'Inter', sans-serif;
+        }
+        .tab-button.active {
+            border-bottom: 3px solid #FF69B4;
+            color: #FF69B4;
+            font-weight: 600;
+        }
+        /* Estilo para o cartão de item */
+        .card-item {
+            transition: all 0.2s ease-in-out;
+        }
+        .card-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(255, 105, 180, 0.1), 0 4px 6px -2px rgba(255, 105, 180, 0.05);
+        }
+        .loading-overlay {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.8);
+            z-index: 50;
+        }
+        /* Spinner CSS */
+        .spinner {
+            border: 4px solid rgba(255, 105, 180, 0.2);
+            border-top: 4px solid #FF69B4;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+
+    <!-- Importações do Firebase -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, addDoc, doc, updateDoc, deleteDoc, query, orderBy, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Configuração de Nível de Log (Obrigatório para Debug)
+        setLogLevel('Debug');
+
+        // Variáveis globais (fornecidas pelo ambiente)
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, db, auth;
+        let currentUserId = null;
+        let isAuthReady = false;
+
+        // Referências do DOM
+        const agendaList = document.getElementById('agenda-list');
+        const taskList = document.getElementById('task-list');
+        const formAgenda = document.getElementById('form-agenda');
+        const formTask = document.getElementById('form-task');
+        const agendaContainer = document.getElementById('agenda-container');
+        const tasksContainer = document.getElementById('tasks-container');
+        const userIdDisplay = document.getElementById('user-id-display');
+        const loadingOverlay = document.getElementById('loading-overlay');
+
+        // Inicializa o Firebase
+        try {
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+        } catch (e) {
+            console.error("Erro ao inicializar Firebase:", e);
+        }
+
+        /**
+         * 1. AUTENTICAÇÃO E INICIALIZAÇÃO
+         */
+        function initializeAuthAndData() {
+            loadingOverlay.classList.remove('hidden');
+
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    currentUserId = user.uid;
+                    isAuthReady = true;
+                    userIdDisplay.textContent = `ID do Usuário: ${currentUserId.substring(0, 8)}... (Completo: ${currentUserId})`;
+                    console.log("Usuário autenticado:", currentUserId);
+                    setupFirestoreListeners();
+                } else {
+                    // Tenta o login com token customizado ou anônimo
+                    try {
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (error) {
+                        console.error("Erro na autenticação:", error);
+                        // Fallback para ID anônimo se a autenticação falhar
+                        currentUserId = crypto.randomUUID();
+                        isAuthReady = true;
+                        userIdDisplay.textContent = `ID Anônimo: ${currentUserId.substring(0, 8)}... (Completo: ${currentUserId})`;
+                        console.log("Autenticação falhou, usando ID Anônimo:", currentUserId);
+                        setupFirestoreListeners();
+                    }
+                }
+                loadingOverlay.classList.add('hidden');
+            });
+        }
+
+        /**
+         * 2. CONFIGURAÇÃO DO FIRESTORE (Listeners e Caminhos)
+         */
+        function getCollectionRef(collectionName) {
+            // Path público obrigatório para apps colaborativos: /artifacts/{appId}/public/data/{collectionName}
+            return collection(db, `artifacts/${appId}/public/data/${collectionName}`);
+        }
+
+        function setupFirestoreListeners() {
+            if (!isAuthReady || !db) {
+                console.warn("Firestore não pronto para configurar listeners.");
+                return;
+            }
+
+            // Listener para a Agenda (ordenado por data e hora)
+            const agendaQuery = query(getCollectionRef('influencer_agenda'), orderBy('timestamp', 'asc'));
+            onSnapshot(agendaQuery, (snapshot) => {
+                const items = [];
+                snapshot.forEach(doc => {
+                    items.push({ id: doc.id, ...doc.data() });
+                });
+                renderAgenda(items);
+            }, (error) => {
+                console.error("Erro ao carregar agenda:", error);
+            });
+
+            // Listener para as Tarefas/Ideias (ordenado por timestamp de criação)
+            const taskQuery = query(getCollectionRef('influencer_tasks'), orderBy('timestamp', 'desc'));
+            onSnapshot(taskQuery, (snapshot) => {
+                const items = [];
+                snapshot.forEach(doc => {
+                    items.push({ id: doc.id, ...doc.data() });
+                });
+                renderTasks(items);
+            }, (error) => {
+                console.error("Erro ao carregar tarefas:", error);
+            });
+        }
+
+        /**
+         * 3. FUNÇÕES DE CRUD (Create, Update, Delete)
+         */
+
+        // Adicionar Item à Agenda
+        async function addAgendaItem(event) {
+            event.preventDefault();
+            if (!currentUserId) return;
+
+            const title = formAgenda.title.value.trim();
+            const date = formAgenda.date.value;
+            const time = formAgenda.time.value;
+            const platform = formAgenda.platform.value;
+
+            if (!title || !date || !time || !platform) {
+                console.error("Todos os campos de agendamento são obrigatórios.");
+                return;
+            }
+
+            const dateTimeString = `${date}T${time}:00`;
+            const timestamp = new Date(dateTimeString).getTime();
+
+            try {
+                await addDoc(getCollectionRef('influencer_agenda'), {
+                    title,
+                    date,
+                    time,
+                    platform,
+                    is_posted: false,
+                    timestamp,
+                    userId: currentUserId,
+                    createdAt: Date.now()
+                });
+                formAgenda.reset();
+            } catch (e) {
+                console.error("Erro ao adicionar item à agenda:", e);
+            }
+        }
+
+        // Adicionar Tarefa/Ideia
+        async function addTaskItem(event) {
+            event.preventDefault();
+            if (!currentUserId) return;
+
+            const title = formTask.taskTitle.value.trim();
+
+            if (!title) {
+                console.error("O título da tarefa é obrigatório.");
+                return;
+            }
+
+            try {
+                await addDoc(getCollectionRef('influencer_tasks'), {
+                    title,
+                    is_completed: false,
+                    userId: currentUserId,
+                    timestamp: Date.now() // Usamos para ordenação
+                });
+                formTask.reset();
+            } catch (e) {
+                console.error("Erro ao adicionar tarefa:", e);
+            }
+        }
+
+        // Marcar/Desmarcar (Agenda - 'Posted', Tarefa - 'Completed')
+        async function toggleStatus(collectionName, id, field, currentValue) {
+            if (!currentUserId) return;
+            try {
+                const itemRef = doc(getCollectionRef(collectionName), id);
+                await updateDoc(itemRef, {
+                    [field]: !currentValue
+                });
+            } catch (e) {
+                console.error(`Erro ao atualizar status em ${collectionName}:`, e);
+            }
+        }
+
+        // Deletar Item
+        async function deleteItem(collectionName, id) {
+            if (!currentUserId) return;
+            try {
+                const itemRef = doc(getCollectionRef(collectionName), id);
+                await deleteDoc(itemRef);
+            } catch (e) {
+                console.error(`Erro ao deletar item em ${collectionName}:`, e);
+            }
+        }
+
+        /**
+         * 4. FUNÇÕES DE RENDERIZAÇÃO
+         */
+
+        function renderAgenda(items) {
+            agendaList.innerHTML = '';
+            if (items.length === 0) {
+                agendaList.innerHTML = '<p class="text-center text-gray-500 py-4">Nenhum agendamento futuro. Comece a planejar!</p>';
+                return;
+            }
+
+            items.forEach(item => {
+                const isPast = new Date(`${item.date}T${item.time}:00`).getTime() < Date.now() && !item.is_posted;
+                const cardClasses = item.is_posted
+                    ? 'bg-green-50 border-green-300'
+                    : isPast
+                        ? 'bg-red-50 border-red-300 opacity-75'
+                        : 'bg-white border-influencer-light shadow-md';
+
+                const statusText = item.is_posted ? 'PUBLICADO' : isPast ? 'ATRASADO' : 'PENDENTE';
+                const statusColor = item.is_posted ? 'bg-green-500' : isPast ? 'bg-red-500' : 'bg-influencer-pink';
+
+                const itemHtml = `
+                    <div class="card-item p-4 border-l-4 ${cardClasses} rounded-lg mb-3 flex justify-between items-center transition duration-300">
+                        <div class="flex-grow">
+                            <div class="font-bold text-lg text-gray-800">${item.title}</div>
+                            <div class="text-sm text-gray-600 mt-1 flex items-center">
+                                <!-- Data e Hora -->
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-4 4h4m-8 0h.01M12 4v.01M12 8v.01m-4 0v.01m8 0v.01M3 15h18M3 9h18" />
+                                </svg>
+                                <span>${item.date} às ${item.time}</span>
+                            </div>
+                            <!-- Plataforma e Status -->
+                            <div class="mt-2 flex items-center justify-between">
+                                <span class="text-xs font-semibold px-2 py-0.5 rounded-full ${statusColor} text-white">${item.platform.toUpperCase()}</span>
+                                <span class="text-xs font-medium text-gray-500 mr-2">${statusText}</span>
+                            </div>
+                        </div>
+                        <div class="flex flex-col space-y-2 ml-4">
+                            <!-- Botão de Marcar/Desmarcar -->
+                            <button onclick="window.toggleStatus('influencer_agenda', '${item.id}', 'is_posted', ${item.is_posted})"
+                                class="p-2 rounded-full text-white ${item.is_posted ? 'bg-gray-500' : 'bg-green-500 hover:bg-green-600'} transition duration-150 shadow-md">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                                </svg>
+                            </button>
+                            <!-- Botão de Deletar -->
+                            <button onclick="window.deleteItem('influencer_agenda', '${item.id}')"
+                                class="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition duration-150 shadow-md">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                `;
+                agendaList.innerHTML += itemHtml;
+            });
+        }
+
+        function renderTasks(items) {
+            taskList.innerHTML = '';
+            if (items.length === 0) {
+                taskList.innerHTML = '<p class="text-center text-gray-500 py-4">Nenhuma tarefa ou ideia de conteúdo pendente.</p>';
+                return;
+            }
+
+            items.forEach(item => {
+                const bgColor = item.is_completed ? 'bg-gray-200 line-through' : 'bg-white shadow-md';
+                const textStyle = item.is_completed ? 'text-gray-500' : 'text-gray-800';
+
+                const itemHtml = `
+                    <div class="card-item p-3 ${bgColor} rounded-lg mb-2 flex justify-between items-center transition duration-300">
+                        <div class="flex items-center flex-grow">
+                            <!-- Checkbox/Toggle -->
+                            <input type="checkbox" ${item.is_completed ? 'checked' : ''}
+                                onclick="window.toggleStatus('influencer_tasks', '${item.id}', 'is_completed', ${item.is_completed})"
+                                class="h-5 w-5 text-influencer-pink border-gray-300 rounded focus:ring-influencer-pink"
+                            >
+                            <span class="ml-3 font-medium ${textStyle} flex-grow">${item.title}</span>
+                        </div>
+                        <!-- Botão de Deletar -->
+                        <button onclick="window.deleteItem('influencer_tasks', '${item.id}')"
+                            class="p-1 rounded-full text-gray-400 hover:text-red-500 transition duration-150">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    </div>
+                `;
+                taskList.innerHTML += itemHtml;
+            });
+        }
+
+        /**
+         * 5. CONTROLE DE ABAS (UI)
+         */
+        function showTab(tabName) {
+            // Esconde todos os containers
+            agendaContainer.classList.add('hidden');
+            tasksContainer.classList.add('hidden');
+
+            // Remove a classe 'active' de todos os botões
+            document.querySelectorAll('.tab-button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+
+            // Mostra o container selecionado e ativa o botão
+            if (tabName === 'agenda') {
+                agendaContainer.classList.remove('hidden');
+                document.getElementById('tab-agenda').classList.add('active');
+            } else if (tabName === 'tasks') {
+                tasksContainer.classList.remove('hidden');
+                document.getElementById('tab-tasks').classList.add('active');
+            }
+        }
+
+        // Expor funções para o escopo global para uso em onClick no HTML
+        window.addAgendaItem = addAgendaItem;
+        window.addTaskItem = addTaskItem;
+        window.toggleStatus = toggleStatus;
+        window.deleteItem = deleteItem;
+        window.showTab = showTab;
+
+        // Inicia a aplicação
+        window.onload = () => {
+            initializeAuthAndData();
+            showTab('agenda'); // Abre a aba de Agenda por padrão
+        };
+    </script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+    <!-- Overlay de Carregamento -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="spinner"></div>
+    </div>
+
+    <div class="max-w-md mx-auto bg-white shadow-xl min-h-screen">
+        <!-- HEADER e NAV -->
+        <header class="p-4 bg-influencer-pink text-white rounded-b-xl shadow-lg">
+            <h1 class="text-2xl font-bold text-center">✨ Planner Influencer Pro</h1>
+            <p id="user-id-display" class="text-center text-xs mt-1 opacity-80"></p>
+        </header>
+
+        <!-- Navegação de Abas -->
+        <nav class="flex justify-around bg-white border-b border-gray-200">
+            <button id="tab-agenda" class="tab-button py-3 w-1/2 text-gray-700 active" onclick="showTab('agenda')">
+                Agendamento
+            </button>
+            <button id="tab-tasks" class="tab-button py-3 w-1/2 text-gray-700" onclick="showTab('tasks')">
+                Tarefas & Ideias
+            </button>
+        </nav>
+
+        <main class="p-4">
+
+            <!-- --------------------------------------- -->
+            <!-- 1. ABA DE AGENDAMENTO (AGENDA) -->
+            <!-- --------------------------------------- -->
+            <div id="agenda-container" class="space-y-6">
+                
+                <!-- Formulário de Nova Postagem/Evento -->
+                <section class="p-4 bg-influencer-light rounded-xl shadow-inner">
+                    <h2 class="text-xl font-semibold mb-3 text-influencer-dark">Agendar Novo Conteúdo</h2>
+                    <form id="form-agenda" onsubmit="window.addAgendaItem(event)" class="space-y-3">
+                        
+                        <div>
+                            <input type="text" id="title" name="title" required placeholder="Título do Conteúdo (Ex: Post maquiagem dia)"
+                                class="w-full p-2 border-2 border-influencer-pink rounded-lg focus:ring-2 focus:ring-influencer-dark focus:border-influencer-dark">
+                        </div>
+
+                        <div class="flex space-x-2">
+                            <input type="date" id="date" name="date" required
+                                class="w-1/2 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-influencer-pink">
+                            <input type="time" id="time" name="time" required
+                                class="w-1/2 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-influencer-pink">
+                        </div>
+                        
+                        <div>
+                            <select id="platform" name="platform" required
+                                class="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-influencer-pink">
+                                <option value="">Selecione a Plataforma</option>
+                                <option value="Instagram Feed">Instagram Feed</option>
+                                <option value="Instagram Stories">Instagram Stories</option>
+                                <option value="TikTok">TikTok</option>
+                                <option value="YouTube Video">YouTube Vídeo</option>
+                                <option value="YouTube Shorts">YouTube Shorts</option>
+                                <option value="Blog Post">Blog Post</option>
+                                <option value="Collab/Live">Collab/Live</option>
+                                <option value="Outro">Outro</option>
+                            </select>
+                        </div>
+                        
+                        <button type="submit"
+                            class="w-full bg-influencer-pink text-white font-bold py-2 rounded-lg hover:bg-influencer-dark transition duration-200 shadow-md transform hover:scale-[1.01]">
+                            Salvar Agendamento
+                        </button>
+                    </form>
+                </section>
+
+                <!-- Lista de Agendamentos -->
+                <section>
+                    <h2 class="text-xl font-semibold mb-3 text-gray-700">Próximos Conteúdos</h2>
+                    <div id="agenda-list" class="space-y-3">
+                        <!-- Itens da agenda serão renderizados aqui pelo JS -->
+                        <p class="text-center text-gray-400 py-4">Carregando agenda...</p>
+                    </div>
+                </section>
+
+            </div>
+
+
+            <!-- --------------------------------------- -->
+            <!-- 2. ABA DE TAREFAS/IDEIAS (TASKS) -->
+            <!-- --------------------------------------- -->
+            <div id="tasks-container" class="space-y-6 hidden">
+                
+                <!-- Formulário de Nova Tarefa/Ideia -->
+                <section class="p-4 bg-gray-100 rounded-xl shadow-inner">
+                    <h2 class="text-xl font-semibold mb-3 text-gray-700">Nova Tarefa / Ideia de Conteúdo</h2>
+                    <form id="form-task" onsubmit="window.addTaskItem(event)" class="flex space-x-2">
+                        <input type="text" id="taskTitle" name="taskTitle" required placeholder="Ex: Pesquisar nova música viral"
+                            class="flex-grow p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-influencer-pink">
+                        <button type="submit"
+                            class="bg-green-500 text-white font-bold px-4 py-2 rounded-lg hover:bg-green-600 transition duration-200 shadow-md">
+                            Add
+                        </button>
+                    </form>
+                </section>
+
+                <!-- Lista de Tarefas/Ideias -->
+                <section>
+                    <h2 class="text-xl font-semibold mb-3 text-gray-700">Lista de To-Dos</h2>
+                    <div id="task-list" class="space-y-2">
+                        <!-- Itens da tarefa serão renderizados aqui pelo JS -->
+                        <p class="text-center text-gray-400 py-4">Carregando tarefas...</p>
+                    </div>
+                </section>
+
+            </div>
+
+        </main>
+        
+        <footer class="text-center text-xs text-gray-400 p-4">
+            Planner Influencer Pro | O seu conteúdo organizado.
+        </footer>
+    </div>
+
+</body>
+</html>
