@@ -42,49 +42,17 @@
             box-shadow: 0 10px 15px -3px rgba(255, 105, 180, 0.1), 0 4px 6px -2px rgba(255, 105, 180, 0.05);
         }
         .loading-overlay {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(255, 255, 255, 0.8);
-            z-index: 50;
-        }
-        /* Spinner CSS */
-        .spinner {
-            border: 4px solid rgba(255, 105, 180, 0.2);
-            border-top: 4px solid #FF69B4;
-            border-radius: 50%;
-            width: 30px;
-            height: 30px;
-            animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            /* Mantido, mas oculto, já que o localStorage é instantâneo */
+            display: none !important;
         }
     </style>
 
-    <!-- Importações do Firebase -->
+    <!-- LÓGICA JAVASCRIPT COM LOCALSTORAGE -->
     <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, onSnapshot, addDoc, doc, updateDoc, deleteDoc, query, orderBy, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
-        // Configuração de Nível de Log (Obrigatório para Debug)
-        setLogLevel('Debug');
-
-        // Variáveis globais (fornecidas pelo ambiente)
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-        let app, db, auth;
-        let currentUserId = null;
-        let isAuthReady = false;
+        
+        // Chaves de armazenamento no localStorage
+        const AGENDA_KEY = 'influencer_agenda_items';
+        const TASKS_KEY = 'influencer_task_items';
 
         // Referências do DOM
         const agendaList = document.getElementById('agenda-list');
@@ -93,90 +61,42 @@
         const formTask = document.getElementById('form-task');
         const agendaContainer = document.getElementById('agenda-container');
         const tasksContainer = document.getElementById('tasks-container');
-        const userIdDisplay = document.getElementById('user-id-display');
-        const loadingOverlay = document.getElementById('loading-overlay');
-
-        // Inicializa o Firebase
-        try {
-            app = initializeApp(firebaseConfig);
-            db = getFirestore(app);
-            auth = getAuth(app);
-        } catch (e) {
-            console.error("Erro ao inicializar Firebase:", e);
-        }
 
         /**
-         * 1. AUTENTICAÇÃO E INICIALIZAÇÃO
+         * Funções de Persistência (localStorage)
          */
-        function initializeAuthAndData() {
-            loadingOverlay.classList.remove('hidden');
 
-            onAuthStateChanged(auth, async (user) => {
-                if (user) {
-                    currentUserId = user.uid;
-                    isAuthReady = true;
-                    userIdDisplay.textContent = `ID do Usuário: ${currentUserId.substring(0, 8)}... (Completo: ${currentUserId})`;
-                    console.log("Usuário autenticado:", currentUserId);
-                    setupFirestoreListeners();
-                } else {
-                    // Tenta o login com token customizado ou anônimo
-                    try {
-                        if (initialAuthToken) {
-                            await signInWithCustomToken(auth, initialAuthToken);
-                        } else {
-                            await signInAnonymously(auth);
-                        }
-                    } catch (error) {
-                        console.error("Erro na autenticação:", error);
-                        // Fallback para ID anônimo se a autenticação falhar
-                        currentUserId = crypto.randomUUID();
-                        isAuthReady = true;
-                        userIdDisplay.textContent = `ID Anônimo: ${currentUserId.substring(0, 8)}... (Completo: ${currentUserId})`;
-                        console.log("Autenticação falhou, usando ID Anônimo:", currentUserId);
-                        setupFirestoreListeners();
-                    }
-                }
-                loadingOverlay.classList.add('hidden');
-            });
+        /** Gera um ID único simples. */
+        function generateId() {
+            return Date.now().toString(36) + Math.random().toString(36).substring(2);
         }
 
-        /**
-         * 2. CONFIGURAÇÃO DO FIRESTORE (Listeners e Caminhos)
-         */
-        function getCollectionRef(collectionName) {
-            // Path público obrigatório para apps colaborativos: /artifacts/{appId}/public/data/{collectionName}
-            return collection(db, `artifacts/${appId}/public/data/${collectionName}`);
-        }
-
-        function setupFirestoreListeners() {
-            if (!isAuthReady || !db) {
-                console.warn("Firestore não pronto para configurar listeners.");
-                return;
+        /** Carrega itens do localStorage ou retorna um array vazio. */
+        function loadItems(key) {
+            try {
+                const stored = localStorage.getItem(key);
+                return stored ? JSON.parse(stored) : [];
+            } catch (e) {
+                console.error(`Erro ao carregar dados da chave ${key}:`, e);
+                return [];
             }
+        }
 
-            // Listener para a Agenda (ordenado por data e hora)
-            const agendaQuery = query(getCollectionRef('influencer_agenda'), orderBy('timestamp', 'asc'));
-            onSnapshot(agendaQuery, (snapshot) => {
-                const items = [];
-                snapshot.forEach(doc => {
-                    items.push({ id: doc.id, ...doc.data() });
-                });
-                renderAgenda(items);
-            }, (error) => {
-                console.error("Erro ao carregar agenda:", error);
-            });
-
-            // Listener para as Tarefas/Ideias (ordenado por timestamp de criação)
-            const taskQuery = query(getCollectionRef('influencer_tasks'), orderBy('timestamp', 'desc'));
-            onSnapshot(taskQuery, (snapshot) => {
-                const items = [];
-                snapshot.forEach(doc => {
-                    items.push({ id: doc.id, ...doc.data() });
-                });
-                renderTasks(items);
-            }, (error) => {
-                console.error("Erro ao carregar tarefas:", error);
-            });
+        /** Salva itens no localStorage. */
+        function saveItems(key, items) {
+            try {
+                localStorage.setItem(key, JSON.stringify(items));
+            } catch (e) {
+                console.error(`Erro ao salvar dados da chave ${key}:`, e);
+            }
+        }
+        
+        /** Carrega todos os dados e dispara a renderização. */
+        function loadDataAndRender() {
+            const agendaItems = loadItems(AGENDA_KEY);
+            const taskItems = loadItems(TASKS_KEY);
+            renderAgenda(agendaItems);
+            renderTasks(taskItems);
         }
 
         /**
@@ -186,7 +106,6 @@
         // Adicionar Item à Agenda
         async function addAgendaItem(event) {
             event.preventDefault();
-            if (!currentUserId) return;
 
             const title = formAgenda.title.value.trim();
             const date = formAgenda.date.value;
@@ -201,27 +120,27 @@
             const dateTimeString = `${date}T${time}:00`;
             const timestamp = new Date(dateTimeString).getTime();
 
-            try {
-                await addDoc(getCollectionRef('influencer_agenda'), {
-                    title,
-                    date,
-                    time,
-                    platform,
-                    is_posted: false,
-                    timestamp,
-                    userId: currentUserId,
-                    createdAt: Date.now()
-                });
-                formAgenda.reset();
-            } catch (e) {
-                console.error("Erro ao adicionar item à agenda:", e);
-            }
+            const newItem = {
+                id: generateId(),
+                title,
+                date,
+                time,
+                platform,
+                is_posted: false,
+                timestamp,
+                createdAt: Date.now()
+            };
+
+            const items = loadItems(AGENDA_KEY);
+            items.push(newItem);
+            saveItems(AGENDA_KEY, items);
+            formAgenda.reset();
+            loadDataAndRender();
         }
 
         // Adicionar Tarefa/Ideia
         async function addTaskItem(event) {
             event.preventDefault();
-            if (!currentUserId) return;
 
             const title = formTask.taskTitle.value.trim();
 
@@ -230,41 +149,38 @@
                 return;
             }
 
-            try {
-                await addDoc(getCollectionRef('influencer_tasks'), {
-                    title,
-                    is_completed: false,
-                    userId: currentUserId,
-                    timestamp: Date.now() // Usamos para ordenação
-                });
-                formTask.reset();
-            } catch (e) {
-                console.error("Erro ao adicionar tarefa:", e);
-            }
+            const newItem = {
+                id: generateId(),
+                title,
+                is_completed: false,
+                timestamp: Date.now()
+            };
+
+            const items = loadItems(TASKS_KEY);
+            items.push(newItem);
+            saveItems(TASKS_KEY, items);
+            formTask.reset();
+            loadDataAndRender();
         }
 
         // Marcar/Desmarcar (Agenda - 'Posted', Tarefa - 'Completed')
-        async function toggleStatus(collectionName, id, field, currentValue) {
-            if (!currentUserId) return;
-            try {
-                const itemRef = doc(getCollectionRef(collectionName), id);
-                await updateDoc(itemRef, {
-                    [field]: !currentValue
-                });
-            } catch (e) {
-                console.error(`Erro ao atualizar status em ${collectionName}:`, e);
+        async function toggleStatus(collectionKey, id, field, currentValue) {
+            const items = loadItems(collectionKey);
+            const itemIndex = items.findIndex(item => item.id === id);
+
+            if (itemIndex > -1) {
+                items[itemIndex][field] = !currentValue;
+                saveItems(collectionKey, items);
+                loadDataAndRender();
             }
         }
 
         // Deletar Item
-        async function deleteItem(collectionName, id) {
-            if (!currentUserId) return;
-            try {
-                const itemRef = doc(getCollectionRef(collectionName), id);
-                await deleteDoc(itemRef);
-            } catch (e) {
-                console.error(`Erro ao deletar item em ${collectionName}:`, e);
-            }
+        async function deleteItem(collectionKey, id) {
+            let items = loadItems(collectionKey);
+            items = items.filter(item => item.id !== id);
+            saveItems(collectionKey, items);
+            loadDataAndRender();
         }
 
         /**
@@ -273,6 +189,10 @@
 
         function renderAgenda(items) {
             agendaList.innerHTML = '';
+            
+            // Ordenação em memória: Mais antigos (timestamp menor) primeiro.
+            items.sort((a, b) => a.timestamp - b.timestamp); 
+
             if (items.length === 0) {
                 agendaList.innerHTML = '<p class="text-center text-gray-500 py-4">Nenhum agendamento futuro. Comece a planejar!</p>';
                 return;
@@ -288,6 +208,9 @@
 
                 const statusText = item.is_posted ? 'PUBLICADO' : isPast ? 'ATRASADO' : 'PENDENTE';
                 const statusColor = item.is_posted ? 'bg-green-500' : isPast ? 'bg-red-500' : 'bg-influencer-pink';
+                
+                // Nota: O nome da coleção é a chave do localStorage (AGENDA_KEY)
+                const collectionKey = AGENDA_KEY;
 
                 const itemHtml = `
                     <div class="card-item p-4 border-l-4 ${cardClasses} rounded-lg mb-3 flex justify-between items-center transition duration-300">
@@ -308,14 +231,14 @@
                         </div>
                         <div class="flex flex-col space-y-2 ml-4">
                             <!-- Botão de Marcar/Desmarcar -->
-                            <button onclick="window.toggleStatus('influencer_agenda', '${item.id}', 'is_posted', ${item.is_posted})"
+                            <button onclick="window.toggleStatus('${collectionKey}', '${item.id}', 'is_posted', ${item.is_posted})"
                                 class="p-2 rounded-full text-white ${item.is_posted ? 'bg-gray-500' : 'bg-green-500 hover:bg-green-600'} transition duration-150 shadow-md">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                                     <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
                                 </svg>
                             </button>
                             <!-- Botão de Deletar -->
-                            <button onclick="window.deleteItem('influencer_agenda', '${item.id}')"
+                            <button onclick="window.deleteItem('${collectionKey}', '${item.id}')"
                                 class="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition duration-150 shadow-md">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -330,6 +253,10 @@
 
         function renderTasks(items) {
             taskList.innerHTML = '';
+
+            // Ordenação em memória: Mais recentes (timestamp maior) primeiro.
+            items.sort((a, b) => b.timestamp - a.timestamp);
+
             if (items.length === 0) {
                 taskList.innerHTML = '<p class="text-center text-gray-500 py-4">Nenhuma tarefa ou ideia de conteúdo pendente.</p>';
                 return;
@@ -338,19 +265,22 @@
             items.forEach(item => {
                 const bgColor = item.is_completed ? 'bg-gray-200 line-through' : 'bg-white shadow-md';
                 const textStyle = item.is_completed ? 'text-gray-500' : 'text-gray-800';
+                
+                // Nota: O nome da coleção é a chave do localStorage (TASKS_KEY)
+                const collectionKey = TASKS_KEY;
 
                 const itemHtml = `
                     <div class="card-item p-3 ${bgColor} rounded-lg mb-2 flex justify-between items-center transition duration-300">
                         <div class="flex items-center flex-grow">
                             <!-- Checkbox/Toggle -->
                             <input type="checkbox" ${item.is_completed ? 'checked' : ''}
-                                onclick="window.toggleStatus('influencer_tasks', '${item.id}', 'is_completed', ${item.is_completed})"
+                                onclick="window.toggleStatus('${collectionKey}', '${item.id}', 'is_completed', ${item.is_completed})"
                                 class="h-5 w-5 text-influencer-pink border-gray-300 rounded focus:ring-influencer-pink"
                             >
                             <span class="ml-3 font-medium ${textStyle} flex-grow">${item.title}</span>
                         </div>
                         <!-- Botão de Deletar -->
-                        <button onclick="window.deleteItem('influencer_tasks', '${item.id}')"
+                        <button onclick="window.deleteItem('${collectionKey}', '${item.id}')"
                             class="p-1 rounded-full text-gray-400 hover:text-red-500 transition duration-150">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -394,14 +324,14 @@
 
         // Inicia a aplicação
         window.onload = () => {
-            initializeAuthAndData();
+            loadDataAndRender();
             showTab('agenda'); // Abre a aba de Agenda por padrão
         };
     </script>
 </head>
 <body class="bg-gray-50 min-h-screen">
 
-    <!-- Overlay de Carregamento -->
+    <!-- Overlay de Carregamento (Agora sempre oculto) -->
     <div id="loading-overlay" class="loading-overlay hidden">
         <div class="spinner"></div>
     </div>
@@ -410,7 +340,7 @@
         <!-- HEADER e NAV -->
         <header class="p-4 bg-influencer-pink text-white rounded-b-xl shadow-lg">
             <h1 class="text-2xl font-bold text-center">✨ Planner Influencer Pro</h1>
-            <p id="user-id-display" class="text-center text-xs mt-1 opacity-80"></p>
+            <p class="text-center text-xs mt-1 opacity-80">Armazenamento Local (Offline)</p>
         </header>
 
         <!-- Navegação de Abas -->
