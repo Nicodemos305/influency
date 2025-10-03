@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agenda da Influencer</title>
+    <title>Planner Influencer Pro</title>
     <!-- Carregamento do Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -11,9 +11,14 @@
             theme: {
                 extend: {
                     colors: {
-                        'influencer-pink': '#FF69B4', // Rosa Choque / Hot Pink
+                        'influencer-pink': '#FF69B4', // Hot Pink
                         'influencer-light': '#FFE0F0',
                         'influencer-dark': '#C71585', // Deep Pink
+                        // Cores para Cards de Colabs
+                        'colab-story': '#FFD54F', // Amarelo (Stories)
+                        'colab-post': '#81C784', // Verde (Feed Post)
+                        'colab-live': '#9575CD', // Roxo (Live)
+                        'colab-other': '#4FC3F7', // Azul Claro (Outro)
                     },
                     fontFamily: {
                         sans: ['Inter', 'sans-serif'],
@@ -23,7 +28,7 @@
         }
     </script>
     <style>
-        /* Estilo customizado para scrollbar e foco em mobile */
+        /* Estilos de interface */
         body {
             background-color: #f7f7f7;
             font-family: 'Inter', sans-serif;
@@ -33,7 +38,6 @@
             color: #FF69B4;
             font-weight: 600;
         }
-        /* Estilo para o cartão de item */
         .card-item {
             transition: all 0.2s ease-in-out;
         }
@@ -41,9 +45,13 @@
             transform: translateY(-2px);
             box-shadow: 0 10px 15px -3px rgba(255, 105, 180, 0.1), 0 4px 6px -2px rgba(255, 105, 180, 0.05);
         }
-        .loading-overlay {
-            /* Mantido, mas oculto, já que o localStorage é instantâneo */
-            display: none !important;
+        /* Estilo para barra de scroll (opcional) */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #FF69B4;
+            border-radius: 3px;
         }
     </style>
 
@@ -53,17 +61,33 @@
         // Chaves de armazenamento no localStorage
         const AGENDA_KEY = 'influencer_agenda_items';
         const TASKS_KEY = 'influencer_task_items';
+        const COLLABS_KEY = 'influencer_colab_items';
+        const EVENTS_KEY = 'influencer_event_items';
 
         // Referências do DOM
         const agendaList = document.getElementById('agenda-list');
         const taskList = document.getElementById('task-list');
+        const colabList = document.getElementById('colab-list');
+        const eventList = document.getElementById('event-list');
+
         const formAgenda = document.getElementById('form-agenda');
         const formTask = document.getElementById('form-task');
+        const formColab = document.getElementById('form-colab');
+        const formEvent = document.getElementById('form-event');
+
         const agendaContainer = document.getElementById('agenda-container');
         const tasksContainer = document.getElementById('tasks-container');
+        const colabsContainer = document.getElementById('colabs-container');
+        const eventsContainer = document.getElementById('events-container');
+
+        // Referências dos Contadores
+        const counterAtrasados = document.getElementById('counter-atrasados');
+        const counterColabsAtivas = document.getElementById('counter-colabs-ativas');
+        const counterEventosProximos = document.getElementById('counter-eventos-proximos');
+
 
         /**
-         * Funções de Persistência (localStorage)
+         * FUNÇÕES UTILITY
          */
 
         /** Gera um ID único simples. */
@@ -90,20 +114,48 @@
                 console.error(`Erro ao salvar dados da chave ${key}:`, e);
             }
         }
-        
-        /** Carrega todos os dados e dispara a renderização. */
-        function loadDataAndRender() {
-            const agendaItems = loadItems(AGENDA_KEY);
-            const taskItems = loadItems(TASKS_KEY);
-            renderAgenda(agendaItems);
-            renderTasks(taskItems);
+
+        /**
+         * Verifica se a data e hora estão no passado.
+         * @param {string} dateString - Data no formato YYYY-MM-DD.
+         * @param {string} timeString - Hora no formato HH:MM.
+         * @returns {boolean} True se a data for passada, false caso contrário.
+         */
+        function isDateInPast(dateString, timeString = '00:00') {
+            if (!dateString) return false;
+            
+            // Cria um objeto Date combinando data e hora
+            const itemDateTime = new Date(`${dateString}T${timeString}:00`);
+            const now = new Date();
+            
+            // Retorna verdadeiro se o itemDateTime for menor que o momento atual
+            return itemDateTime.getTime() < now.getTime();
         }
 
         /**
-         * 3. FUNÇÕES DE CRUD (Create, Update, Delete)
+         * CRIA, ATUALIZA E EXCLUI (CRUD)
          */
 
-        // Adicionar Item à Agenda
+        // Funções Genéricas de Update/Delete
+        async function toggleStatus(collectionKey, id, field, currentValue) {
+            const items = loadItems(collectionKey);
+            const itemIndex = items.findIndex(item => item.id === id);
+
+            if (itemIndex > -1) {
+                items[itemIndex][field] = !currentValue;
+                saveItems(collectionKey, items);
+                loadDataAndRender();
+            }
+        }
+
+        async function deleteItem(collectionKey, id) {
+            let items = loadItems(collectionKey);
+            items = items.filter(item => item.id !== id);
+            saveItems(collectionKey, items);
+            loadDataAndRender();
+        }
+        
+        // --- AGENDA CRUD ---
         async function addAgendaItem(event) {
             event.preventDefault();
 
@@ -117,18 +169,17 @@
                 return;
             }
 
+            if (isDateInPast(date, time)) {
+                alert("Erro: Você não pode agendar um post no passado.");
+                return;
+            }
+
             const dateTimeString = `${date}T${time}:00`;
             const timestamp = new Date(dateTimeString).getTime();
 
             const newItem = {
-                id: generateId(),
-                title,
-                date,
-                time,
-                platform,
-                is_posted: false,
-                timestamp,
-                createdAt: Date.now()
+                id: generateId(), title, date, time, platform,
+                is_posted: false, timestamp, createdAt: Date.now()
             };
 
             const items = loadItems(AGENDA_KEY);
@@ -138,24 +189,13 @@
             loadDataAndRender();
         }
 
-        // Adicionar Tarefa/Ideia
+        // --- TAREFAS CRUD ---
         async function addTaskItem(event) {
             event.preventDefault();
-
             const title = formTask.taskTitle.value.trim();
+            if (!title) return;
 
-            if (!title) {
-                console.error("O título da tarefa é obrigatório.");
-                return;
-            }
-
-            const newItem = {
-                id: generateId(),
-                title,
-                is_completed: false,
-                timestamp: Date.now()
-            };
-
+            const newItem = { id: generateId(), title, is_completed: false, timestamp: Date.now() };
             const items = loadItems(TASKS_KEY);
             items.push(newItem);
             saveItems(TASKS_KEY, items);
@@ -163,86 +203,208 @@
             loadDataAndRender();
         }
 
-        // Marcar/Desmarcar (Agenda - 'Posted', Tarefa - 'Completed')
-        async function toggleStatus(collectionKey, id, field, currentValue) {
-            const items = loadItems(collectionKey);
+        // --- COLABS CRUD ---
+        async function addColab(event) {
+            event.preventDefault();
+
+            const brandName = formColab.brandName.value.trim();
+            const type = formColab.type.value;
+            const price = parseFloat(formColab.price.value) || 0;
+            const dueDate = formColab.dueDate.value;
+
+            if (!brandName || !type || !dueDate) {
+                alert("Erro: Marca, Tipo e Data Limite são obrigatórios.");
+                return;
+            }
+
+            if (isDateInPast(dueDate)) {
+                alert("Erro: A data limite de uma Colab não pode ser no passado.");
+                return;
+            }
+
+            const newItem = {
+                id: generateId(), brandName, type, price, dueDate,
+                status: 'pendente', // status inicial
+                timestamp: new Date(dueDate).getTime()
+            };
+
+            const items = loadItems(COLLABS_KEY);
+            items.push(newItem);
+            saveItems(COLLABS_KEY, items);
+            formColab.reset();
+            loadDataAndRender();
+        }
+
+        async function toggleColabStatus(id) {
+            const items = loadItems(COLLABS_KEY);
             const itemIndex = items.findIndex(item => item.id === id);
 
             if (itemIndex > -1) {
-                items[itemIndex][field] = !currentValue;
-                saveItems(collectionKey, items);
+                const currentStatus = items[itemIndex].status;
+                items[itemIndex].status = currentStatus === 'pendente' ? 'entregue' : 'pendente';
+                saveItems(COLLABS_KEY, items);
                 loadDataAndRender();
             }
         }
 
-        // Deletar Item
-        async function deleteItem(collectionKey, id) {
-            let items = loadItems(collectionKey);
-            items = items.filter(item => item.id !== id);
-            saveItems(collectionKey, items);
+        // --- EVENTOS CRUD ---
+        async function addEvent(event) {
+            event.preventDefault();
+
+            const eventName = formEvent.eventName.value.trim();
+            const date = formEvent.date.value;
+            const time = formEvent.time.value;
+            const location = formEvent.location.value.trim();
+            const maxAttendees = parseInt(formEvent.maxAttendees.value) || Infinity;
+
+            if (!eventName || !date || !time) {
+                alert("Erro: Nome, Data e Hora do Evento são obrigatórios.");
+                return;
+            }
+
+            if (isDateInPast(date, time)) {
+                alert("Erro: Você não pode adicionar um evento no passado.");
+                return;
+            }
+
+            const newItem = {
+                id: generateId(), eventName, date, time, location, maxAttendees,
+                attendees: [], // Lista de participantes
+                timestamp: new Date(`${date}T${time}:00`).getTime()
+            };
+
+            const items = loadItems(EVENTS_KEY);
+            items.push(newItem);
+            saveItems(EVENTS_KEY, items);
+            formEvent.reset();
             loadDataAndRender();
         }
 
-        /**
-         * 4. FUNÇÕES DE RENDERIZAÇÃO
-         */
+        async function addAttendee(id) {
+            const attendeeName = prompt("Insira o nome do participante:");
+            if (!attendeeName || attendeeName.trim() === "") return;
 
+            const items = loadItems(EVENTS_KEY);
+            const itemIndex = items.findIndex(item => item.id === id);
+
+            if (itemIndex > -1) {
+                const event = items[itemIndex];
+                if (event.attendees.length >= event.maxAttendees) {
+                    alert(`O evento "${event.eventName}" atingiu o limite máximo de ${event.maxAttendees} participantes.`);
+                    return;
+                }
+                
+                event.attendees.push(attendeeName.trim());
+                saveItems(EVENTS_KEY, items);
+                loadDataAndRender();
+            }
+        }
+
+
+        /**
+         * RENDERIZAÇÃO E ATUALIZAÇÃO DE CONTADORES
+         */
+        
+        function updateCounters() {
+            // 1. Posts Atrasados
+            const agendaItems = loadItems(AGENDA_KEY);
+            let atrasados = 0;
+            agendaItems.forEach(item => {
+                if (!item.is_posted && isDateInPast(item.date, item.time)) {
+                    atrasados++;
+                }
+            });
+            counterAtrasados.textContent = atrasados;
+            counterAtrasados.parentNode.classList.toggle('text-red-600', atrasados > 0);
+            counterAtrasados.parentNode.classList.toggle('text-gray-500', atrasados === 0);
+
+            // 2. Colabs Ativas (Pendentes e não vencidas)
+            const colabItems = loadItems(COLLABS_KEY);
+            let ativas = 0;
+            colabItems.forEach(item => {
+                if (item.status === 'pendente' && !isDateInPast(item.dueDate)) {
+                    ativas++;
+                }
+            });
+            counterColabsAtivas.textContent = ativas;
+
+            // 3. Eventos Próximos (Próximos 7 dias)
+            const eventItems = loadItems(EVENTS_KEY);
+            let proximos = 0;
+            const oneWeek = 7 * 24 * 60 * 60 * 1000;
+            const now = Date.now();
+            
+            eventItems.forEach(item => {
+                const eventTime = item.timestamp;
+                // Deve ser futuro E em até 7 dias
+                if (eventTime > now && (eventTime - now) <= oneWeek) {
+                    proximos++;
+                }
+            });
+            counterEventosProximos.textContent = proximos;
+            counterEventosProximos.parentNode.classList.toggle('text-blue-600', proximos > 0);
+            counterEventosProximos.parentNode.classList.toggle('text-gray-500', proximos === 0);
+        }
+
+        function loadDataAndRender() {
+            const agendaItems = loadItems(AGENDA_KEY);
+            const taskItems = loadItems(TASKS_KEY);
+            const colabItems = loadItems(COLLABS_KEY);
+            const eventItems = loadItems(EVENTS_KEY);
+            
+            renderAgenda(agendaItems);
+            renderTasks(taskItems);
+            renderColabs(colabItems);
+            renderEvents(eventItems);
+            updateCounters();
+        }
+
+
+        // --- Renderização AGENDA ---
         function renderAgenda(items) {
             agendaList.innerHTML = '';
-            
             // Ordenação em memória: Mais antigos (timestamp menor) primeiro.
             items.sort((a, b) => a.timestamp - b.timestamp); 
 
             if (items.length === 0) {
-                agendaList.innerHTML = '<p class="text-center text-gray-500 py-4">Nenhum agendamento futuro. Comece a planejar!</p>';
+                agendaList.innerHTML = '<p class="text-center text-gray-500 py-4">Nenhum agendamento. Use o formulário acima!</p>';
                 return;
             }
 
             items.forEach(item => {
-                const isPast = new Date(`${item.date}T${item.time}:00`).getTime() < Date.now() && !item.is_posted;
+                const isOverdue = !item.is_posted && isDateInPast(item.date, item.time);
                 const cardClasses = item.is_posted
-                    ? 'bg-green-50 border-green-300'
-                    : isPast
-                        ? 'bg-red-50 border-red-300 opacity-75'
+                    ? 'bg-green-50 border-green-400'
+                    : isOverdue
+                        ? 'bg-red-100 border-red-500 opacity-90'
                         : 'bg-white border-influencer-light shadow-md';
 
-                const statusText = item.is_posted ? 'PUBLICADO' : isPast ? 'ATRASADO' : 'PENDENTE';
-                const statusColor = item.is_posted ? 'bg-green-500' : isPast ? 'bg-red-500' : 'bg-influencer-pink';
-                
-                // Nota: O nome da coleção é a chave do localStorage (AGENDA_KEY)
-                const collectionKey = AGENDA_KEY;
+                const statusText = item.is_posted ? 'PUBLICADO' : isOverdue ? 'ATRASADO' : 'PENDENTE';
+                const statusColor = item.is_posted ? 'bg-green-500' : isOverdue ? 'bg-red-500' : 'bg-influencer-pink';
 
                 const itemHtml = `
                     <div class="card-item p-4 border-l-4 ${cardClasses} rounded-lg mb-3 flex justify-between items-center transition duration-300">
                         <div class="flex-grow">
                             <div class="font-bold text-lg text-gray-800">${item.title}</div>
                             <div class="text-sm text-gray-600 mt-1 flex items-center">
-                                <!-- Data e Hora -->
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-4 4h4m-8 0h.01M12 4v.01M12 8v.01m-4 0v.01m8 0v.01M3 15h18M3 9h18" />
-                                </svg>
+                                <span class="mr-2 text-influencer-dark font-medium">${item.platform}</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-4 4h4m-8 0h.01M12 4v.01M12 8v.01m-4 0v.01m8 0v.01M3 15h18M3 9h18" /></svg>
                                 <span>${item.date} às ${item.time}</span>
                             </div>
-                            <!-- Plataforma e Status -->
-                            <div class="mt-2 flex items-center justify-between">
-                                <span class="text-xs font-semibold px-2 py-0.5 rounded-full ${statusColor} text-white">${item.platform.toUpperCase()}</span>
-                                <span class="text-xs font-medium text-gray-500 mr-2">${statusText}</span>
+                            <div class="mt-2">
+                                <span class="text-xs font-semibold px-2 py-0.5 rounded-full ${statusColor} text-white">${statusText}</span>
                             </div>
                         </div>
                         <div class="flex flex-col space-y-2 ml-4">
-                            <!-- Botão de Marcar/Desmarcar -->
-                            <button onclick="window.toggleStatus('${collectionKey}', '${item.id}', 'is_posted', ${item.is_posted})"
+                            <button onclick="window.toggleStatus('${AGENDA_KEY}', '${item.id}', 'is_posted', ${item.is_posted})"
                                 class="p-2 rounded-full text-white ${item.is_posted ? 'bg-gray-500' : 'bg-green-500 hover:bg-green-600'} transition duration-150 shadow-md">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                                     <path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" />
                                 </svg>
                             </button>
-                            <!-- Botão de Deletar -->
-                            <button onclick="window.deleteItem('${collectionKey}', '${item.id}')"
+                            <button onclick="window.deleteItem('${AGENDA_KEY}', '${item.id}')"
                                 class="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 transition duration-150 shadow-md">
-                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                             </button>
                         </div>
                     </div>
@@ -250,76 +412,200 @@
                 agendaList.innerHTML += itemHtml;
             });
         }
-
+        
+        // --- Renderização TAREFAS ---
         function renderTasks(items) {
             taskList.innerHTML = '';
-
             // Ordenação em memória: Mais recentes (timestamp maior) primeiro.
             items.sort((a, b) => b.timestamp - a.timestamp);
 
             if (items.length === 0) {
-                taskList.innerHTML = '<p class="text-center text-gray-500 py-4">Nenhuma tarefa ou ideia de conteúdo pendente.</p>';
+                taskList.innerHTML = '<p class="text-center text-gray-500 py-4">Nenhuma tarefa ou ideia pendente. Ótimo!</p>';
                 return;
             }
 
             items.forEach(item => {
                 const bgColor = item.is_completed ? 'bg-gray-200 line-through' : 'bg-white shadow-md';
                 const textStyle = item.is_completed ? 'text-gray-500' : 'text-gray-800';
-                
-                // Nota: O nome da coleção é a chave do localStorage (TASKS_KEY)
-                const collectionKey = TASKS_KEY;
 
                 const itemHtml = `
                     <div class="card-item p-3 ${bgColor} rounded-lg mb-2 flex justify-between items-center transition duration-300">
                         <div class="flex items-center flex-grow">
-                            <!-- Checkbox/Toggle -->
                             <input type="checkbox" ${item.is_completed ? 'checked' : ''}
-                                onclick="window.toggleStatus('${collectionKey}', '${item.id}', 'is_completed', ${item.is_completed})"
+                                onclick="window.toggleStatus('${TASKS_KEY}', '${item.id}', 'is_completed', ${item.is_completed})"
                                 class="h-5 w-5 text-influencer-pink border-gray-300 rounded focus:ring-influencer-pink"
                             >
                             <span class="ml-3 font-medium ${textStyle} flex-grow">${item.title}</span>
                         </div>
-                        <!-- Botão de Deletar -->
-                        <button onclick="window.deleteItem('${collectionKey}', '${item.id}')"
+                        <button onclick="window.deleteItem('${TASKS_KEY}', '${item.id}')"
                             class="p-1 rounded-full text-gray-400 hover:text-red-500 transition duration-150">
-                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                            </svg>
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
                         </button>
                     </div>
                 `;
                 taskList.innerHTML += itemHtml;
             });
         }
+        
+        // --- Renderização COLABS ---
+        function renderColabs(items) {
+            colabList.innerHTML = '';
+            
+            // Ordenação: Pendentes primeiro, depois entregues.
+            items.sort((a, b) => {
+                if (a.status === 'pendente' && b.status === 'entregue') return -1;
+                if (a.status === 'entregue' && b.status === 'pendente') return 1;
+                return b.timestamp - a.timestamp; // Em caso de mesmo status, mais recente primeiro
+            }); 
+
+            if (items.length === 0) {
+                colabList.innerHTML = '<p class="text-center text-gray-500 py-4">Nenhuma colab registrada. Bora fechar parcerias!</p>';
+                return;
+            }
+
+            items.forEach(item => {
+                const isOverdue = item.status === 'pendente' && isDateInPast(item.dueDate);
+                const statusColor = item.status === 'entregue' ? 'bg-green-500' : isOverdue ? 'bg-red-500' : 'bg-yellow-500';
+                const statusText = item.status === 'entregue' ? 'ENTREGUE' : isOverdue ? 'VENCIDA' : 'PENDENTE';
+
+                let cardColor = 'bg-gray-100';
+                if (item.type === 'Instagram Stories') cardColor = 'bg-colab-story';
+                else if (item.type === 'Instagram Post/Reel') cardColor = 'bg-colab-post';
+                else if (item.type === 'Live') cardColor = 'bg-colab-live';
+                else cardColor = 'bg-colab-other';
+
+                const itemHtml = `
+                    <div class="card-item p-4 ${cardColor} bg-opacity-80 rounded-lg mb-3 shadow-md transition duration-300">
+                        <div class="flex justify-between items-start">
+                            <div class="flex-grow">
+                                <div class="font-extrabold text-xl text-gray-900">${item.brandName}</div>
+                                <div class="text-sm font-semibold text-gray-700 mt-1">${item.type}</div>
+                            </div>
+                            <div class="flex flex-col items-end space-y-1 ml-4">
+                                <span class="text-xs font-semibold px-2 py-0.5 rounded-full ${statusColor} text-white">${statusText}</span>
+                                <span class="text-xs text-gray-700">R$ ${item.price.toFixed(2)}</span>
+                            </div>
+                        </div>
+                        <div class="mt-3 pt-3 border-t border-gray-400 border-opacity-30 flex justify-between items-center">
+                            <div class="text-sm font-medium text-gray-700">
+                                Limite: <span class="font-bold">${item.dueDate}</span>
+                            </div>
+                            <div class="flex space-x-2">
+                                <button onclick="window.toggleColabStatus('${item.id}')"
+                                    class="text-xs font-bold px-3 py-1 rounded-full text-white ${item.status === 'pendente' ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-500 hover:bg-gray-600'} transition shadow-md">
+                                    ${item.status === 'pendente' ? 'Marcar Entregue' : 'Marcar Pendente'}
+                                </button>
+                                <button onclick="window.deleteItem('${COLLABS_KEY}', '${item.id}')"
+                                    class="p-1.5 rounded-full bg-red-500 text-white hover:bg-red-600 transition shadow-md">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                colabList.innerHTML += itemHtml;
+            });
+        }
+
+        // --- Renderização EVENTOS ---
+        function renderEvents(items) {
+            eventList.innerHTML = '';
+
+            // Ordenação: Por data crescente.
+            items.sort((a, b) => a.timestamp - b.timestamp); 
+
+            if (items.length === 0) {
+                eventList.innerHTML = '<p class="text-center text-gray-500 py-4">Nenhum evento registrado. Participe de mais meetups!</p>';
+                return;
+            }
+
+            const now = Date.now();
+            const oneWeek = 7 * 24 * 60 * 60 * 1000;
+
+            items.forEach(item => {
+                const isPast = item.timestamp < now;
+                const isNear = item.timestamp > now && (item.timestamp - now) <= oneWeek;
+                
+                const cardClasses = isPast 
+                    ? 'bg-gray-200 opacity-70 border-gray-400'
+                    : isNear
+                        ? 'bg-blue-100 border-blue-500 shadow-xl' // Destaque para evento próximo
+                        : 'bg-white border-blue-200 shadow-md';
+                
+                const statusLabel = isPast ? 'Passado' : (isNear ? 'Próximo!' : 'Futuro');
+                const statusColor = isPast ? 'bg-gray-500' : (isNear ? 'bg-blue-600' : 'bg-indigo-500');
+                
+                const attendanceCount = item.attendees.length;
+                const maxAttendeesText = item.maxAttendees === Infinity ? 'Sem limite' : item.maxAttendees;
+                const attendanceStatus = attendanceCount >= item.maxAttendees ? 'text-red-500' : 'text-green-600';
+
+                const itemHtml = `
+                    <div class="card-item p-4 border-l-4 ${cardClasses} rounded-lg mb-3 transition duration-300">
+                        <div class="flex justify-between items-start">
+                            <h3 class="font-bold text-lg text-gray-800">${item.eventName}</h3>
+                            <span class="text-xs font-semibold px-2 py-0.5 rounded-full ${statusColor} text-white">${statusLabel}</span>
+                        </div>
+                        <div class="text-sm text-gray-600 mt-1 space-y-1">
+                            <p>📍 ${item.location}</p>
+                            <p>🗓️ ${item.date} às ${item.time}</p>
+                            <p class="${attendanceStatus} font-bold">Público: ${attendanceCount} / ${maxAttendeesText}</p>
+                        </div>
+
+                        <!-- Lista de Participantes -->
+                        ${item.attendees.length > 0 ? `<div class="mt-2 text-xs text-gray-500 italic">Participantes: ${item.attendees.join(', ')}</div>` : ''}
+
+                        <div class="mt-3 pt-3 border-t border-gray-400 border-opacity-30 flex justify-between items-center">
+                            <button onclick="window.addAttendee('${item.id}')" ${isPast ? 'disabled' : ''}
+                                class="text-xs font-bold px-3 py-1 rounded-full text-white ${isPast ? 'bg-gray-400' : 'bg-indigo-600 hover:bg-indigo-700'} transition shadow-md">
+                                Confirmar Presença
+                            </button>
+                            <button onclick="window.deleteItem('${EVENTS_KEY}', '${item.id}')"
+                                class="p-1.5 rounded-full bg-red-500 text-white hover:bg-red-600 transition shadow-md">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                            </button>
+                        </div>
+                    </div>
+                `;
+                eventList.innerHTML += itemHtml;
+            });
+        }
+
 
         /**
          * 5. CONTROLE DE ABAS (UI)
          */
         function showTab(tabName) {
-            // Esconde todos os containers
-            agendaContainer.classList.add('hidden');
-            tasksContainer.classList.add('hidden');
+            // Mapeamento de abas e containers
+            const tabs = ['agenda', 'tasks', 'colabs', 'events'];
+            const containers = {
+                'agenda': agendaContainer,
+                'tasks': tasksContainer,
+                'colabs': colabsContainer,
+                'events': eventsContainer
+            };
 
+            // Esconde todos os containers
+            tabs.forEach(tab => containers[tab].classList.add('hidden'));
+            
             // Remove a classe 'active' de todos os botões
             document.querySelectorAll('.tab-button').forEach(btn => {
                 btn.classList.remove('active');
             });
 
             // Mostra o container selecionado e ativa o botão
-            if (tabName === 'agenda') {
-                agendaContainer.classList.remove('hidden');
-                document.getElementById('tab-agenda').classList.add('active');
-            } else if (tabName === 'tasks') {
-                tasksContainer.classList.remove('hidden');
-                document.getElementById('tab-tasks').classList.add('active');
-            }
+            containers[tabName].classList.remove('hidden');
+            document.getElementById(`tab-${tabName}`).classList.add('active');
         }
 
         // Expor funções para o escopo global para uso em onClick no HTML
         window.addAgendaItem = addAgendaItem;
         window.addTaskItem = addTaskItem;
+        window.addColab = addColab;
+        window.addEvent = addEvent;
         window.toggleStatus = toggleStatus;
         window.deleteItem = deleteItem;
+        window.toggleColabStatus = toggleColabStatus;
+        window.addAttendee = addAttendee;
         window.showTab = showTab;
 
         // Inicia a aplicação
@@ -331,25 +617,42 @@
 </head>
 <body class="bg-gray-50 min-h-screen">
 
-    <!-- Overlay de Carregamento (Agora sempre oculto) -->
-    <div id="loading-overlay" class="loading-overlay hidden">
-        <div class="spinner"></div>
-    </div>
-
     <div class="max-w-md mx-auto bg-white shadow-xl min-h-screen">
-        <!-- HEADER e NAV -->
+        <!-- HEADER e CONTADORES -->
         <header class="p-4 bg-influencer-pink text-white rounded-b-xl shadow-lg">
             <h1 class="text-2xl font-bold text-center">✨ Planner Influencer Pro</h1>
             <p class="text-center text-xs mt-1 opacity-80">Armazenamento Local (Offline)</p>
+            
+            <!-- Contadores Rápidos -->
+            <div class="flex justify-around mt-3 text-sm font-semibold">
+                <div class="text-red-600 flex flex-col items-center">
+                    <span id="counter-atrasados" class="text-xl">0</span>
+                    Posts Atrasados
+                </div>
+                <div class="text-yellow-300 flex flex-col items-center">
+                    <span id="counter-colabs-ativas" class="text-xl">0</span>
+                    Colabs Ativas
+                </div>
+                <div class="text-blue-300 flex flex-col items-center">
+                    <span id="counter-eventos-proximos" class="text-xl">0</span>
+                    Eventos Próx.
+                </div>
+            </div>
         </header>
 
         <!-- Navegação de Abas -->
-        <nav class="flex justify-around bg-white border-b border-gray-200">
-            <button id="tab-agenda" class="tab-button py-3 w-1/2 text-gray-700 active" onclick="showTab('agenda')">
-                Agendamento
+        <nav class="flex justify-around bg-white border-b border-gray-200 overflow-x-auto whitespace-nowrap">
+            <button id="tab-agenda" class="tab-button py-3 px-2 text-gray-700 active flex-1" onclick="showTab('agenda')">
+                Agenda
             </button>
-            <button id="tab-tasks" class="tab-button py-3 w-1/2 text-gray-700" onclick="showTab('tasks')">
-                Tarefas & Ideias
+            <button id="tab-tasks" class="tab-button py-3 px-2 text-gray-700 flex-1" onclick="showTab('tasks')">
+                Tarefas
+            </button>
+            <button id="tab-colabs" class="tab-button py-3 px-2 text-gray-700 flex-1" onclick="showTab('colabs')">
+                Colabs
+            </button>
+            <button id="tab-events" class="tab-button py-3 px-2 text-gray-700 flex-1" onclick="showTab('events')">
+                Eventos
             </button>
         </nav>
 
@@ -360,50 +663,36 @@
             <!-- --------------------------------------- -->
             <div id="agenda-container" class="space-y-6">
                 
-                <!-- Formulário de Nova Postagem/Evento -->
                 <section class="p-4 bg-influencer-light rounded-xl shadow-inner">
                     <h2 class="text-xl font-semibold mb-3 text-influencer-dark">Agendar Novo Conteúdo</h2>
                     <form id="form-agenda" onsubmit="window.addAgendaItem(event)" class="space-y-3">
-                        
-                        <div>
-                            <input type="text" id="title" name="title" required placeholder="Título do Conteúdo (Ex: Post maquiagem dia)"
-                                class="w-full p-2 border-2 border-influencer-pink rounded-lg focus:ring-2 focus:ring-influencer-dark focus:border-influencer-dark">
-                        </div>
-
+                        <div><input type="text" id="title" name="title" required placeholder="Título do Conteúdo (Ex: Post maquiagem dia)"
+                            class="w-full p-2 border-2 border-influencer-pink rounded-lg focus:ring-2 focus:ring-influencer-dark focus:border-influencer-dark"></div>
                         <div class="flex space-x-2">
-                            <input type="date" id="date" name="date" required
-                                class="w-1/2 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-influencer-pink">
-                            <input type="time" id="time" name="time" required
-                                class="w-1/2 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-influencer-pink">
+                            <input type="date" id="date" name="date" required class="w-1/2 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-influencer-pink">
+                            <input type="time" id="time" name="time" required class="w-1/2 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-influencer-pink">
                         </div>
-                        
-                        <div>
-                            <select id="platform" name="platform" required
-                                class="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-influencer-pink">
-                                <option value="">Selecione a Plataforma</option>
-                                <option value="Instagram Feed">Instagram Feed</option>
-                                <option value="Instagram Stories">Instagram Stories</option>
-                                <option value="TikTok">TikTok</option>
-                                <option value="YouTube Video">YouTube Vídeo</option>
-                                <option value="YouTube Shorts">YouTube Shorts</option>
-                                <option value="Blog Post">Blog Post</option>
-                                <option value="Collab/Live">Collab/Live</option>
-                                <option value="Outro">Outro</option>
-                            </select>
-                        </div>
-                        
-                        <button type="submit"
-                            class="w-full bg-influencer-pink text-white font-bold py-2 rounded-lg hover:bg-influencer-dark transition duration-200 shadow-md transform hover:scale-[1.01]">
+                        <div><select id="platform" name="platform" required
+                            class="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-influencer-pink">
+                            <option value="">Selecione a Plataforma</option>
+                            <option value="Instagram Feed">Instagram Feed</option>
+                            <option value="Instagram Stories">Instagram Stories</option>
+                            <option value="TikTok">TikTok</option>
+                            <option value="YouTube Video">YouTube Vídeo</option>
+                            <option value="YouTube Shorts">YouTube Shorts</option>
+                            <option value="Blog Post">Blog Post</option>
+                            <option value="Collab/Live">Collab/Live</option>
+                            <option value="Outro">Outro</option>
+                        </select></div>
+                        <button type="submit" class="w-full bg-influencer-pink text-white font-bold py-2 rounded-lg hover:bg-influencer-dark transition duration-200 shadow-md transform hover:scale-[1.01]">
                             Salvar Agendamento
                         </button>
                     </form>
                 </section>
 
-                <!-- Lista de Agendamentos -->
                 <section>
                     <h2 class="text-xl font-semibold mb-3 text-gray-700">Próximos Conteúdos</h2>
                     <div id="agenda-list" class="space-y-3">
-                        <!-- Itens da agenda serão renderizados aqui pelo JS -->
                         <p class="text-center text-gray-400 py-4">Carregando agenda...</p>
                     </div>
                 </section>
@@ -416,7 +705,6 @@
             <!-- --------------------------------------- -->
             <div id="tasks-container" class="space-y-6 hidden">
                 
-                <!-- Formulário de Nova Tarefa/Ideia -->
                 <section class="p-4 bg-gray-100 rounded-xl shadow-inner">
                     <h2 class="text-xl font-semibold mb-3 text-gray-700">Nova Tarefa / Ideia de Conteúdo</h2>
                     <form id="form-task" onsubmit="window.addTaskItem(event)" class="flex space-x-2">
@@ -429,12 +717,83 @@
                     </form>
                 </section>
 
-                <!-- Lista de Tarefas/Ideias -->
                 <section>
                     <h2 class="text-xl font-semibold mb-3 text-gray-700">Lista de To-Dos</h2>
                     <div id="task-list" class="space-y-2">
-                        <!-- Itens da tarefa serão renderizados aqui pelo JS -->
                         <p class="text-center text-gray-400 py-4">Carregando tarefas...</p>
+                    </div>
+                </section>
+
+            </div>
+
+            <!-- --------------------------------------- -->
+            <!-- 3. ABA DE COLABS/PARCERIAS (COLABS) -->
+            <!-- --------------------------------------- -->
+            <div id="colabs-container" class="space-y-6 hidden">
+                
+                <section class="p-4 bg-yellow-100 rounded-xl shadow-inner">
+                    <h2 class="text-xl font-semibold mb-3 text-gray-800">Nova Colab / Parceria</h2>
+                    <form id="form-colab" onsubmit="window.addColab(event)" class="space-y-3">
+                        <div><input type="text" id="brandName" name="brandName" required placeholder="Nome da Marca Parceira"
+                            class="w-full p-2 border border-yellow-500 rounded-lg focus:ring-2 focus:ring-yellow-600"></div>
+                        <div class="flex space-x-2">
+                            <input type="number" id="price" name="price" placeholder="Valor (R$)" min="0" step="0.01"
+                                class="w-1/3 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-600">
+                            <select id="type" name="type" required class="w-2/3 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-600">
+                                <option value="">Tipo de Conteúdo</option>
+                                <option value="Instagram Stories">Stories</option>
+                                <option value="Instagram Post/Reel">Post/Reel</option>
+                                <option value="Live">Live</option>
+                                <option value="Outro">Outro</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-sm font-medium text-gray-600">Data Limite de Entrega</label>
+                            <input type="date" id="dueDate" name="dueDate" required class="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-yellow-600">
+                        </div>
+                        <button type="submit" class="w-full bg-yellow-500 text-white font-bold py-2 rounded-lg hover:bg-yellow-600 transition duration-200 shadow-md transform hover:scale-[1.01]">
+                            Salvar Colab
+                        </button>
+                    </form>
+                </section>
+
+                <section>
+                    <h2 class="text-xl font-semibold mb-3 text-gray-700">Minhas Parcerias</h2>
+                    <div id="colab-list" class="space-y-3">
+                        <p class="text-center text-gray-400 py-4">Carregando colabs...</p>
+                    </div>
+                </section>
+
+            </div>
+
+            <!-- --------------------------------------- -->
+            <!-- 4. ABA DE EVENTOS/MEETUPS (EVENTS) -->
+            <!-- --------------------------------------- -->
+            <div id="events-container" class="space-y-6 hidden">
+                
+                <section class="p-4 bg-blue-100 rounded-xl shadow-inner">
+                    <h2 class="text-xl font-semibold mb-3 text-gray-800">Novo Evento / Meetup</h2>
+                    <form id="form-event" onsubmit="window.addEvent(event)" class="space-y-3">
+                        <div><input type="text" id="eventName" name="eventName" required placeholder="Nome do Evento (Ex: Lançamento do Produto X)"
+                            class="w-full p-2 border border-blue-500 rounded-lg focus:ring-2 focus:ring-blue-600"></div>
+                        <div class="flex space-x-2">
+                            <input type="date" id="date" name="date" required class="w-1/3 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600">
+                            <input type="time" id="time" name="time" required class="w-1/3 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600">
+                            <input type="number" id="maxAttendees" name="maxAttendees" placeholder="Max. Pessoas" min="1"
+                                class="w-1/3 p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600">
+                        </div>
+                        <div><input type="text" id="location" name="location" placeholder="Local ou Link (Ex: Sala 301 / Zoom Link)"
+                            class="w-full p-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-600"></div>
+                        <button type="submit" class="w-full bg-indigo-500 text-white font-bold py-2 rounded-lg hover:bg-indigo-600 transition duration-200 shadow-md transform hover:scale-[1.01]">
+                            Salvar Evento
+                        </button>
+                    </form>
+                </section>
+
+                <section>
+                    <h2 class="text-xl font-semibold mb-3 text-gray-700">Meus Eventos e Meetups</h2>
+                    <div id="event-list" class="space-y-3">
+                        <p class="text-center text-gray-400 py-4">Carregando eventos...</p>
                     </div>
                 </section>
 
